@@ -9,6 +9,8 @@ A multi-agent coding workflow that keeps agents cheap and honest, plus a costed 
 
 Why it exists, with measurements: [docs/token-economics.md](docs/token-economics.md) and [docs/case-study.md](docs/case-study.md).
 
+The whole workflow on one page: [docs/grok-review-workflow.drawio](docs/grok-review-workflow.drawio) (open in draw.io or app.diagrams.net). This repository's own review before publication, round by round with its cost: [docs/self-review.md](docs/self-review.md).
+
 ## Quick start
 
 ```bash
