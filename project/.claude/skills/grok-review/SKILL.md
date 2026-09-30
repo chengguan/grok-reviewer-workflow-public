@@ -21,7 +21,7 @@ Workflow-template's rule: inject a briefing, retrieve a history.
 1. Your verify command passes (from `AGENTS.md`). Don't spend reviewer tokens on a red build.
 2. `$GR start --task "<#issue or one line>" [--paths "src/ tests/"] [--base main] [--target pr:N]`
    - Use `--paths` whenever the tree has unrelated changes (assets, screenshots). The review covers only what's scoped.
-   - Use `--base` for committed work. Leave it out for uncommitted work.
+   - Use `--base` for committed work (`--base empty` reviews every file: a new repo or a release). Leave it out for uncommitted work.
    - It refuses if a review is active or `NOW.md` already says `Review: requested`. Find out whose review it is before using `--force`.
 3. `$GR scan`
    - `clear`: go on.

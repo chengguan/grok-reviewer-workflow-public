@@ -25,7 +25,7 @@ rv=$(sed -n 's/.*reviewed value \([0-9a-f]\{12\}\.[0-9a-f]\{8\}\).*/\1/p' "$pf" 
 [ -n "${STUB_FORGE:-}" ] && rv=${rv%%.*}   # a block pre-written into a diff can know the fingerprint, never the nonce
 n=$(( $(cat "$STUB_DIR/calls-$sid" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$STUB_DIR/calls-$sid"
 echo "{\"session\":{\"totalTokens\":$((n * 1000)),\"inputTokens\":$((n * 900)),\"cachedReadTokens\":0,\"outputTokens\":$((n * 100)),\"reasoningTokens\":0,\"modelCalls\":$n,\"costUsdTicks\":$((n * 10000000)),\"primaryModelId\":\"stub\"}}" > "$STUB_DIR/usage-$sid.json"
-c='[]'; [ "${STUB_VERDICT:-pass}" = comments ] && c='[{"gate":"Security","severity":"high","location":"app.py:1","issue":"Query built from input. More text.","fix":"Bind it."}]'
+c='[]'; [ "${STUB_VERDICT:-pass}" = comments ] && c='[{"gate":"Security","severity":"high","location":"app.py:1","issue":"Query built from input. More text.","fix":"Bind it."},{"gate":"Privacy","severity":"low","location":"app.py:2","issue":"Logs ann@example.com on failure.","fix":"Drop it."}]'
 body="{\"verdict\":\"${STUB_VERDICT:-pass}\",\"reviewed\":\"$rv\",\"comments\":$c,\"coverage\":{\"applied\":{\"S-D\":\"query\"},\"na\":[\"S-A\"]}}"
 jq -cn --arg t "$(printf '```json\n%s\n```' "$body")" '{type:"text",data:$t}'
 echo '{"type":"end","stopReason":"end_turn","num_turns":1,"total_cost_usd_ticks":10000000}'
@@ -69,10 +69,13 @@ check "trusted repo: AGENTS.md is not injected again" '! grep -q "^## AGENTS.md"
 S1=$(ls -d .git/grok-review/current/r1.1)
 check "a filename with spaces stays one scanner argument" 'grep -qF "<./my file.py>" "$S1/scanners.txt"'
 check "a file named --config reaches the scanner as ./--config" 'grep -qF "<./--config>" "$S1/scanners.txt"'
+check "NOW.md block redacts a secret quoted in a finding" '"$GR" verdict | grep -q "Logs \[redacted\] on failure" && ! "$GR" verdict | grep -q "ann@example.com"'
+check "task log redacts a secret quoted in a finding" 'grep -q "\[redacted\]" docs/tasks/t.log.md && ! grep -q "ann@example.com" docs/tasks/t.log.md'
+check "the diff sits between nonce-tagged delimiters" 'grep -q "^BEGIN UNTRUSTED-DIFF-[0-9a-f]\{8\}$" "$P1" && grep -q "^END UNTRUSTED-DIFF-[0-9a-f]\{8\}$" "$P1"'
 check "NOW.md block is one short line per finding" '"$GR" verdict | grep -qx -- "- \[Security\]\[high\] app.py:1 — Query built from input"'
 check "full finding is appended to the task log NOW.md names" 'grep -q "Bind it" docs/tasks/t.log.md'
 check "coder row before round 1 meters only the coder's work since start" 'grep -q "| 1 (coder) |.*claude-test coder | \*\*550\*\*" docs/REVIEW-COSTS.md'
-check "ledger row recorded with the round cost" 'grep -q "| 1 | .*| comments |.*\*\*1000\*\*" docs/REVIEW-COSTS.md'
+check "ledger row recorded with the round cost" 'grep -q "| 1 | .*| comments .*\*\*1000\*\*" docs/REVIEW-COSTS.md'
 
 # 3. round 2: resumed session, delta prompt only
 echo 'q = ("SELECT ?", name)' > app.py
