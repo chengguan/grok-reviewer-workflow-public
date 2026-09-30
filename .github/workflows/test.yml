@@ -8,6 +8,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - name: bash 3.2 (system)
-        run: /bin/bash project/.claude/skills/grok-review/tests/run.sh
+        run: |
+          /bin/bash project/.claude/skills/grok-review/tests/run.sh
+          /bin/bash project/.claude/skills/coder-workflow/tests/run.sh
       - name: bash 5 (Homebrew)
-        run: brew install bash && "$(brew --prefix)/bin/bash" project/.claude/skills/grok-review/tests/run.sh
+        run: |
+          brew install bash
+          "$(brew --prefix)/bin/bash" project/.claude/skills/grok-review/tests/run.sh
+          "$(brew --prefix)/bin/bash" project/.claude/skills/coder-workflow/tests/run.sh

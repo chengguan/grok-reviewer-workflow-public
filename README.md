@@ -6,6 +6,7 @@ A multi-agent coding workflow that keeps agents cheap and honest, plus a costed 
 - **grok-review (`project/.claude/skills/grok-review/`).** The coder (e.g. Claude Code) runs Grok Build as a headless, sandboxed, read-only reviewer. It scores the change against an OWASP ASVS L2 / privacy / hygiene rubric and loops until a clean pass or contention.
   - Every round's cost goes to a ledger, **coder and reviewer both**.
   - The round-by-round record can be posted to the PR as evidence.
+- **coder-workflow (`project/.claude/skills/coder-workflow/`).** Keeps the coder's own session cheap: context-size checks, a hand-off checklist when a session gets heavy, and per-task cost. `coder.sh task start|resume|pause|done` tracks one session segment at a time in `.git/coder-workflow/` (never committed); `task report` adds the task's grok-review rounds on top, so `docs/tasks/<id>.cost.md` is the whole task's cost, coder and reviewer, with nothing double-counted.
 
 Why it exists, with measurements: [docs/token-economics.md](docs/token-economics.md) and [docs/case-study.md](docs/case-study.md).
 
@@ -31,6 +32,7 @@ project/                                copy this onto a repo root
   AGENTS.md                             durable law + load protocol
   docs/NOW.md, WORKFLOW.md, DECISIONS.md, REVIEW-COSTS.md
   .claude/skills/grok-review/           SKILL.md, CHECKLIST.md (rubric), grok-review.sh, tests/run.sh
+  .claude/skills/coder-workflow/        SKILL.md, coder.sh, tests/run.sh
 examples/                               density samples; do not copy into a repo
 docs/                                   the reasoning and the numbers
 ```
