@@ -1,0 +1,13 @@
+name: tests
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash 3.2 (system)
+        run: /bin/bash project/.claude/skills/grok-review/tests/run.sh
+      - name: bash 5 (Homebrew)
+        run: brew install bash && "$(brew --prefix)/bin/bash" project/.claude/skills/grok-review/tests/run.sh
