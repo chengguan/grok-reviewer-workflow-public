@@ -37,7 +37,7 @@ docs/                                   the reasoning and the numbers
 
 - **Reviewer:** Grok-specific. It relies on Grok Build's headless flags, `--sandbox strict` and `grok usage`.
 - **Coder metering:** reads Claude Code transcripts. Both could sit behind adapters, but contributions are welcome.
-- **Tested:** `tests/run.sh` has 32 offline tests with a stub `grok`. They pass on macOS `/bin/bash` 3.2. CI also runs them on bash 5.
+- **Tested:** `tests/run.sh` has 37 offline tests with a stub `grok`. They pass on macOS `/bin/bash` 3.2. CI also runs them on bash 5.
 - **Linux:** not yet verified.
 - **Rubric:** the privacy section includes a Singapore (PDPA/NRIC) overlay. Swap in your own jurisdiction.
 

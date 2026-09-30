@@ -97,6 +97,9 @@ check "ledger round 2 cost is the delta, not the session total" 'grep -q "| 2 (a
 check "update --check reports drift from a canonical copy" 'mkdir -p "$T/canon" && cp -R "$HERE/../." "$T/canon/" && echo x >> "$T/canon/SKILL.md" && GROK_REVIEW_CANON=$T/canon "$GR" update --check >/dev/null; [ $? = 10 ]'
 eval "$(sed -n '/^run_limited() {/,/^}/p' "$GR")"
 t0=$(date +%s); run_limited 2 /bin/bash -c '(exec -a grtest-orphan sleep 30) & wait' >/dev/null 2>&1; t1=$(date +%s)
+eval "$(sed -n '/^blocking_count() {/,/^}/p' "$GR")"
+printf '{"comments":[{"severity":"Blocker"},{"severity":" INFO "},{"severity":"low"},{"gate":"Code"}]}' > "$T/sev.json"
+check "unknown or missing severities block; low and info never do" '[ "$(blocking_count "$T/sev.json")" = 2 ]'
 check "scanner timeout stops the whole process group" '[ $((t1 - t0)) -lt 8 ] && ! pgrep -f grtest-orphan >/dev/null'
 
 # 4. scrub before publishing
@@ -116,8 +119,10 @@ SCRUB_EXTRA='(' "$GR" post >/dev/null 2>&1; check "post fails closed on a broken
 
 # 5. handoff parser (workflow-template comment form)
 cd "$R"; now idle ""
-"$GR" start --task "handoff" --session "$(uuidgen | tr A-Z a-z)" --force >/dev/null 2>&1 || true
+"$GR" start --task 'handoff $(touch PWN3) `touch PWN4`' --session "$(uuidgen | tr A-Z a-z)" --force >/dev/null 2>&1 || true
 . .git/grok-review/current/review.env
+"$GR" status >/dev/null 2>&1
+check "task names with shell metacharacters stay inert" '[ ! -e PWN3 ] && [ ! -e PWN4 ]'
 D=.git/grok-review/current/rX; mkdir -p "$D"
 printf '# NOW\nReview: comments\nReviewed: abcdefabcdef\n\nReview comments:\n- Code: zone-id strip runs before the RFC check\n- Security: —\n- Privacy: —\n' > docs/NOW.md
 bash -c "eval \"\$(sed -n '/^extract_verdict() {/,/^}/p' '$GR')\"; D='$D'; MODE=handoff; NOW=docs/NOW.md; extract_verdict \"\$D\""

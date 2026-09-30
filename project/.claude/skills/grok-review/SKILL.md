@@ -78,7 +78,7 @@ Settings go in `.grok-review.env` as plain `KEY=VALUE` data, never executed, or 
 | `MAX_ROUNDS` / `MAX_TOKENS` / `MAX_COST_USD` | 5 / 10M / 10 | Per review |
 | `TIMEOUT_MIN` / `MAX_GROK` | 30 / 3 | Per round / machine-wide Grok processes |
 | `DIFF_INJECT_MAX` / `LARGE_FILE_MAX` | 80 KB / 1 MB | A diff above this is retrieved, not injected. Untracked files above this are skipped |
-| `OWNER` / `SCRUB_EXTRA` / `SCAN_TIMEOUT_SEC` | The owner / — / 300 | Who rules on contention / extra publish-scrub regex / per scanner |
+| `OWNER` / `SCRUB_EXTRA` / `SCAN_TIMEOUT_SEC` | the owner / — / 300 | Who rules on contention / extra publish-scrub regex / per scanner |
 
 Environment only: `SCAN_CMDS` (`auto` runs gitleaks, semgrep and osv-scanner if installed; `none`; or commands with `{files}`), plus `GROK`, `NOW`, `LEDGER` and `CHECKLIST`.
 
