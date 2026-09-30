@@ -2,7 +2,7 @@
 # grok-review.sh — the mechanical half of the Grok review loop. SKILL.md holds the judgment half.
 #
 #   init                      set up this repo (ledger, .gitattributes, NOW.md template)
-#   start --task T [--base REF] [--paths "a/ b.c"] [--target pr:N|issue:N] [--session SID] [--force]
+#   start --task T [--task-id ID] [--base REF] [--paths "a/ b.c"] [--target pr:N|issue:N] [--session SID] [--force]
 #   scan                      instance check: is it safe to spawn a reviewer?  exit 0 clear, 10 wait, 20 ask
 #   round [--force]           run one review round and record it (exit codes below)
 #   verdict                   print the NOW.md block for the last valid round
@@ -19,7 +19,7 @@
 # Settings come from the environment or $ROOT/.grok-review.env. Written for macOS /bin/bash 3.2.
 
 set -o pipefail
-GR_VERSION=2026.09.30.7   # canonical copy: grok-reviewer-workflow-public/project/.claude/skills/grok-review
+GR_VERSION=2026.09.30.8   # canonical copy: grok-reviewer-workflow-public/project/.claude/skills/grok-review
 HERE=$(cd "$(dirname "$0")" && pwd -P)
 
 die()  { local c=${2:-6}; echo "grok-review: $1" >&2; exit "$c"; }
@@ -72,7 +72,7 @@ SCOPE=(.)   # pathspecs under review; set per review with start --paths
 EXCL=(":(exclude)$(rel "$NOW")" ":(exclude)docs/tasks" ":(exclude)$(rel "$LEDGER")")
 
 # ---------- state ----------
-load() { [ -f "$CUR/review.env" ] || die "no active review; run: start"; . "$CUR/review.env"; read -r -a SCOPE <<< "${PATHS:-.}"; }
+load() { [ -f "$CUR/review.env" ] || die "no active review; run: start"; TASK_ID=""; . "$CUR/review.env"; read -r -a SCOPE <<< "${PATHS:-.}"; }
 setv() {
   local f=$CUR/review.env
   { grep -v "^$1=" "$f" 2>/dev/null; printf '%s=%q\n' "$1" "$2"; } > "$f.tmp" && mv "$f.tmp" "$f"
@@ -203,6 +203,25 @@ ledger_row() {  # dir label
     "$(tok_between "$D/usage.before.json" "$D/usage.after.json" reasoningTokens)" \
     "$(tok_between "$D/usage.before.json" "$D/usage.after.json" modelCalls)" \
     "$turns" "$((secs / 60))m$((secs % 60))s" "$cost" | tee -a "$LEDGER"
+  task_row "$(printf '| %s | %s | reviewer | round %s: %s | **%s** | %s | %s | %s | %s | %s | %s |' \
+    "$(date +%F)" "${SID:0:8}" "$(basename "$D" | sed 's/^r//; s/\.1$//; s/\.\([0-9]\)$/ (attempt \1)/')" "${label//|/\/}" \
+    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" totalTokens)" \
+    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" inputTokens)" \
+    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" cachedReadTokens)" \
+    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" outputTokens)" \
+    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" modelCalls)" \
+    "$((secs / 60))m$((secs % 60))s" "$cost")"
+}
+# The coder-workflow task ledger (docs/tasks/<id>.cost.md) gets reviewer rounds only. The coder's time is
+# metered there by coder.sh session segments, so this script's "(coder)" rows are never copied: no double count.
+task_row() {  # row
+  [ -n "${TASK_ID:-}" ] || return 0
+  local f=${CODER_TASKS_DIR:-$ROOT/docs/tasks}/$TASK_ID.cost.md
+  if [ -L "$f" ] || [ -L "$(dirname "$f")" ]; then echo "grok-review: not writing the task ledger through a symlink: $f" >&2; return 0; fi
+  if [ ! -f "$f" ]; then mkdir -p "$(dirname "$f")"
+    printf '# Task cost: %s\n\nAppend-only. One row per coder session segment (coder.sh task pause/done) and per review round (grok-review.sh).\nTokens = input (incl. cached) + output. Report: coder.sh task report %s\n\n| Date | Session | Kind | Segment | Total tokens | Input | Cached | Output | Calls | Wall | USD |\n|---|---|---|---|---|---|---|---|---|---|---|\n' "$TASK_ID" "$TASK_ID" > "$f"
+  fi
+  printf '%s\n' "$1" >> "$f"
 }
 
 # ---------- scanners (optional, run by the coder before the reviewer) ----------
@@ -467,12 +486,15 @@ EOF
 }
 
 cmd_start() {
-  local task="" base="" target="" session="" force=0 paths=""
+  local task="" base="" target="" session="" force=0 paths="" task_id=""
   while [ $# -gt 0 ]; do case "$1" in
-    --task) task=$2; shift 2;; --base) base=$2; shift 2;; --target) target=$2; shift 2;;
+    --task) task=$2; shift 2;; --task-id) task_id=$2; shift 2;; --base) base=$2; shift 2;; --target) target=$2; shift 2;;
     --session) session=$2; shift 2;; --paths) paths=$2; shift 2;; --force) force=1; shift;; *) die "start: unknown option $1";; esac; done
   need jq; need uuidgen; [ -x "$GROK" ] || die "grok not found (set GROK=)"
   [ -n "$task" ] || die "start: --task is required"
+  [ -n "$task_id" ] || task_id=$(cat "$(git -C "$ROOT" rev-parse --absolute-git-dir)/coder-workflow/task" 2>/dev/null)   # the active coder task
+  case "$task_id" in [!A-Za-z0-9]*|*[!A-Za-z0-9._-]*|*..*) die "start: bad --task-id (letters, digits, . _ -)";; esac
+  [ ${#task_id} -le 64 ] || die "start: --task-id is too long"
   if [ -f "$CUR/review.env" ]; then
     ( . "$CUR/review.env"; [ -n "$OUTCOME" ] ) || die "review $(. "$CUR/review.env"; echo "$SID ($TASK)") is still active: continue with round, or close with finish --outcome stopped"
     mkdir -p "$STATE_ROOT/archive"; mv "$CUR" "$STATE_ROOT/archive/$(. "$CUR/review.env"; echo "$SID")"
@@ -492,7 +514,7 @@ cmd_start() {
     local n; n=$(cd "$ROOT" && gh pr view --json number -q .number 2>/dev/null) && [ -n "$n" ] && target=pr:$n
   fi
   [ -z "$target" ] && case "$task" in *'#'[0-9]*) target=issue:$(printf '%s' "$task" | sed -n 's/.*#\([0-9][0-9]*\).*/\1/p');; esac
-  setv TASK "$task"; setv BASE "$base"; setv BASE_SHA "$base_sha"; setv TARGET "$target"; setv PATHS "${paths:-.}"
+  setv TASK "$task"; setv TASK_ID "$task_id"; setv BASE "$base"; setv BASE_SHA "$base_sha"; setv TARGET "$target"; setv PATHS "${paths:-.}"
   setv N 1; setv ATTEMPT 1; setv OUTCOME ""; setv STARTED "$(date +%F)"
   usage_json "$SID" > "$CUR/usage-base.json"
   setv CODER_T "$(coder_transcript)"; coder_mark; cp "$CUR/coder-mark.json" "$CUR/coder-base.json"
@@ -500,6 +522,7 @@ cmd_start() {
   case "$insp" in *"Project trusted: yes"*) setv TRUSTED yes;; *) setv TRUSTED no;; esac
   echo "review started: session $SID ($MODE), base $base (${base_sha:0:8}), scope ${paths:-.}, target ${target:-none yet}"
   echo "coder cost from: ${CODER_T:-none found (set CODER_TRANSCRIPT)}"
+  [ -n "$task_id" ] && echo "task cost: reviewer rounds also go to ${CODER_TASKS_DIR:-docs/tasks}/$task_id.cost.md"
   echo "changed files:"; changed_files | sed 's/^/  /'
   echo "Next: write the review request into $(rel "$NOW") (Review: requested), then run: round"
 }
