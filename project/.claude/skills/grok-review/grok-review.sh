@@ -19,7 +19,7 @@
 # Settings come from the environment or $ROOT/.grok-review.env. Written for macOS /bin/bash 3.2.
 
 set -o pipefail
-GR_VERSION=2026.09.30.8   # canonical copy: grok-reviewer-workflow-public/project/.claude/skills/grok-review
+GR_VERSION=2026.09.30.9   # canonical copy: grok-reviewer-workflow-public/project/.claude/skills/grok-review
 HERE=$(cd "$(dirname "$0")" && pwd -P)
 
 die()  { local c=${2:-6}; echo "grok-review: $1" >&2; exit "$c"; }
@@ -30,8 +30,8 @@ ROOT=$(cd "$ROOT" && pwd -P)
 STATE_ROOT=$(git -C "$ROOT" rev-parse --absolute-git-dir)/grok-review   # never committed
 CUR=$STATE_ROOT/current
 # .grok-review.env is data, never code: only allowlisted KEY=VALUE lines, no command substitution.
-# The environment wins over the file. Commands (SCAN_CMDS) and paths (GROK, NOW, LEDGER, CHECKLIST) are env-only.
-CONF_KEYS=" OWNER ASVS_LEVEL EFFORT MODEL MAX_ROUNDS MAX_TOKENS MAX_COST_USD TIMEOUT_MIN MAX_GROK MAX_TURNS DIFF_INJECT_MAX LARGE_FILE_MAX SCAN_TIMEOUT_SEC SCRUB_EXTRA "
+# The environment wins over the file. Commands (SCAN_CMDS) and paths (GROK, NOW, LEDGER, CHECKLIST, CODER_TASKS_DIR) are env-only.
+CONF_KEYS=" OWNER ASVS_LEVEL EFFORT MODEL MAX_ROUNDS MAX_TOKENS MAX_COST_USD TIMEOUT_MIN MAX_GROK MAX_TURNS DIFF_INJECT_MAX LARGE_FILE_MAX SCAN_TIMEOUT_SEC SCRUB_EXTRA CODER_ROUND_WARN CODER_CONTEXT_MAX "
 read_conf() {
   local f=$ROOT/.grok-review.env line k v
   [ -f "$f" ] || return 0
@@ -62,6 +62,8 @@ MODEL=${MODEL:-}
 MAX_TURNS=${MAX_TURNS:-80}
 DIFF_INJECT_MAX=${DIFF_INJECT_MAX:-80000}  # bytes of diff put into the prompt; larger diffs are retrieved
 LARGE_FILE_MAX=${LARGE_FILE_MAX:-1000000} # untracked files above this are listed, not reviewed or hashed
+CODER_ROUND_WARN=${CODER_ROUND_WARN:-1000000}; case "$CODER_ROUND_WARN" in ''|*[!0-9]*) CODER_ROUND_WARN=1000000;; esac
+CODER_CONTEXT_MAX=${CODER_CONTEXT_MAX:-150000}; case "$CODER_CONTEXT_MAX" in ''|*[!0-9]*) CODER_CONTEXT_MAX=150000;; esac
 OWNER=${OWNER:-the owner}
 SCAN_CMDS=${SCAN_CMDS:-auto}            # env only: "auto", "none", or newline-separated commands; {files} = changed files
 SCAN_TIMEOUT_SEC=${SCAN_TIMEOUT_SEC:-300}
@@ -83,8 +85,10 @@ usage_json() {  # session usage as JSON; {"session":{}} when there is none yet
   local out; out=$("$GROK" usage "$1" 2>/dev/null) && printf '%s' "$out" | jq -ce . 2>/dev/null || echo '{"session":{}}'
 }
 session_exists() { local o; o=$("$GROK" usage "$1" 2>&1); case "$o" in *"not found"*) return 1;; esac; return 0; }
-coder_transcript() {  # CODER_TRANSCRIPT, else this repo's newest Claude Code transcript; never another project's
+coder_transcript() {  # CODER_TRANSCRIPT, else this exact session's transcript, else this repo's newest; never another project's
   local slug t; [ -n "${CODER_TRANSCRIPT:-}" ] && { echo "$CODER_TRANSCRIPT"; return 0; }
+  case "${CLAUDE_CODE_SESSION_ID:-}" in *[!0-9a-f-]*|'') ;; *)   # this session's own transcript, when Claude Code says which
+    t=$(ls "$HOME/.claude/projects"/*/"$CLAUDE_CODE_SESSION_ID.jsonl" 2>/dev/null | head -1); [ -n "$t" ] && { echo "$t"; return 0; };; esac
   slug=$(printf '%s' "$ROOT" | tr '/.' '--')
   t=$(ls -t "$HOME/.claude/projects/$slug"/*.jsonl 2>/dev/null | head -1)
   [ -z "$t" ] && echo "grok-review: no Claude Code transcript for this repo, so coder cost is not metered (set CODER_TRANSCRIPT)" >&2
@@ -106,14 +110,29 @@ coder_row() {  # label — one ledger row for the coder's work since the last ma
   [ -n "${CODER_T:-}" ] && [ -f "$CUR/coder-mark.json" ] || return 0
   local now secs; now=$(mktemp); coder_usage "$CODER_T" > "$now"
   secs=$(( $(date +%s) - $(cat "$CUR/coder-mark.t") ))
+  CODER_ROUND_TOK=$(tok_between "$CUR/coder-mark.json" "$now" totalTokens)
   printf '| %s | %s | %s | %s | | | %s | %s | **%s** | %s | %s | %s | — | %s | — | %s | plan |\n' \
     "$(date +%F)" "${TASK//|/\/}" "${SID:0:8}" "$2" "$1" "$(jq -r '.session.primaryModelId // "claude"' "$now") coder" \
-    "$(tok_between "$CUR/coder-mark.json" "$now" totalTokens)" "$(tok_between "$CUR/coder-mark.json" "$now" inputTokens)" \
+    "$CODER_ROUND_TOK" "$(tok_between "$CUR/coder-mark.json" "$now" inputTokens)" \
     "$(tok_between "$CUR/coder-mark.json" "$now" cachedReadTokens)" "$(tok_between "$CUR/coder-mark.json" "$now" outputTokens)" \
     "$(tok_between "$CUR/coder-mark.json" "$now" modelCalls)" "$((secs / 60))m$((secs % 60))s" >> "$LEDGER"
   mv "$now" "$CUR/coder-mark.json"; date +%s > "$CUR/coder-mark.t"
 }
 tok_between() { jq -rn --slurpfile a "$1" --slurpfile b "$2" --arg k "$3" '(($b[0].session[$k] // 0) - ($a[0].session[$k] // 0))'; }
+coder_context() {  # transcript -> the last main-thread response's prompt size (what the next call re-sends)
+  grep '"type":"assistant"' "$1" 2>/dev/null | tail -200 | jq -rs '
+    [.[] | select(.type == "assistant" and (.isSidechain | not) and .message.usage != null) | .message.usage
+      | .input_tokens + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0) | select(. > 0)]
+    | last // 0' 2>/dev/null || echo 0
+}
+coder_report() {  # after coder_row: the round's coder tokens and the current context, with hand-off warnings
+  [ -n "${CODER_ROUND_TOK:-}" ] || return 0
+  local c; c=$(coder_context "$CODER_T")
+  echo "coder: $CODER_ROUND_TOK tokens this round · context $c tokens ($((c * 100 / CODER_CONTEXT_MAX))% of $CODER_CONTEXT_MAX)"
+  [ "$CODER_ROUND_TOK" -gt "$CODER_ROUND_WARN" ] && echo "warning: coder round used $CODER_ROUND_TOK tokens — start the next round in a fresh session (coder.sh handoff)"
+  [ "$c" -gt "$CODER_CONTEXT_MAX" ] && echo "warning: coder context is over CODER_CONTEXT_MAX — hand off now (coder.sh handoff)"
+  return 0
+}
 
 large_untracked() {  # untracked files in scope over LARGE_FILE_MAX: never hashed into git; listed for the reviewer
   (cd "$ROOT" && git ls-files -o --exclude-standard -z -- "${SCOPE[@]}" "${EXCL[@]}" |
@@ -193,24 +212,16 @@ ledger_row() {  # dir label
   if [ "$(jq -r '.session.costUsdTicks // "none"' "$D/usage.after.json")" = none ]; then cost=unreported
   elif [ -n "$reported" ] && [ "$reported" != "$ticks" ]; then cost="$(usd "$ticks") (run said $(usd "$reported"))"
   else cost=$(usd "$ticks"); fi
+  local rnd tot inp cac out calls wall; rnd=$(basename "$D" | sed 's/^r//; s/\.1$//; s/\.\([0-9]\)$/ (attempt \1)/')
+  tot=$(tok_between "$D/usage.before.json" "$D/usage.after.json" totalTokens); inp=$(tok_between "$D/usage.before.json" "$D/usage.after.json" inputTokens)
+  cac=$(tok_between "$D/usage.before.json" "$D/usage.after.json" cachedReadTokens); out=$(tok_between "$D/usage.before.json" "$D/usage.after.json" outputTokens)
+  calls=$(tok_between "$D/usage.before.json" "$D/usage.after.json" modelCalls); wall="$((secs / 60))m$((secs % 60))s"
   printf '| %s | %s | %s | %s | %s | %s | %s | %s | **%s** | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
-    "$(date +%F)" "${TASK//|/\/}" "${SID:0:8}" "$(basename "$D" | sed 's/^r//; s/\.1$//; s/\.\([0-9]\)$/ (attempt \1)/')" \
-    "$(cat "$D/head")" "$(cat "$D/fp")" "$label" "$model/$EFFORT$shared" \
-    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" totalTokens)" \
-    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" inputTokens)" \
-    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" cachedReadTokens)" \
-    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" outputTokens)" \
-    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" reasoningTokens)" \
-    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" modelCalls)" \
-    "$turns" "$((secs / 60))m$((secs % 60))s" "$cost" | tee -a "$LEDGER"
+    "$(date +%F)" "${TASK//|/\/}" "${SID:0:8}" "$rnd" "$(cat "$D/head")" "$(cat "$D/fp")" "$label" "$model/$EFFORT$shared" \
+    "$tot" "$inp" "$cac" "$out" "$(tok_between "$D/usage.before.json" "$D/usage.after.json" reasoningTokens)" "$calls" \
+    "$turns" "$wall" "$cost" | tee -a "$LEDGER"
   task_row "$(printf '| %s | %s | reviewer | round %s: %s | **%s** | %s | %s | %s | %s | %s | %s |' \
-    "$(date +%F)" "${SID:0:8}" "$(basename "$D" | sed 's/^r//; s/\.1$//; s/\.\([0-9]\)$/ (attempt \1)/')" "${label//|/\/}" \
-    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" totalTokens)" \
-    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" inputTokens)" \
-    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" cachedReadTokens)" \
-    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" outputTokens)" \
-    "$(tok_between "$D/usage.before.json" "$D/usage.after.json" modelCalls)" \
-    "$((secs / 60))m$((secs % 60))s" "$cost")"
+    "$(date +%F)" "${SID:0:8}" "$rnd" "${label//|/\/}" "$tot" "$inp" "$cac" "$out" "$calls" "$wall" "$cost")"
 }
 # The coder-workflow task ledger (docs/tasks/<id>.cost.md) gets reviewer rounds only. The coder's time is
 # metered there by coder.sh session segments, so this script's "(coder)" rows are never copied: no double count.
@@ -552,6 +563,7 @@ cmd_round() {
   date +%s > "$D/start"
   echo "round $N (attempt $ATTEMPT) · fingerprint $(cat "$D/fp") · session ${SID:0:8} ($MODE)"
   coder_row "coder: work before round $N" "$N (coder)"
+  coder_report
   if [ "$MODE" = spawn ]; then run_scanners "$D"; run_grok "$D"; else wait_handoff "$D"; fi
   date +%s > "$D/end"
   finalize_round "$D"
@@ -688,6 +700,7 @@ cmd_finish() {
   wall=$(for d in "$CUR"/r*; do [ -f "$d/end" ] && echo $(( $(cat "$d/end") - $(cat "$d/start") )); done | awk '{s+=$1} END{printf "%dm%ds", s/60, s%60}')
   local cost; cost=$(jq -r '.session.costUsdTicks // empty' "$u" | awk -v b="$(jq -r '.session.costUsdTicks // 0' "$CUR/usage-base.json")" 'NF{printf "%.4f", ($1-b)/1e10}')
   coder_row "coder: wrap-up" "end (coder)"
+  coder_report
   local rt ct; rt=$(tok_between "$CUR/usage-base.json" "$u" totalTokens)
   printf '| %s | %s | %s | **total reviewer** | | | %s | %s | **%s** | %s | %s | %s | %s | %s | %s | %s | %s |\n' \
     "$(date +%F)" "${TASK//|/\/}" "${SID:0:8}" "$outcome${reason:+ ($reason)}" \
